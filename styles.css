@@ -103,6 +103,7 @@ h1 {
 }
 
 h2 { margin: 0; font-size: 1.15rem; font-weight: 700; letter-spacing: -0.02em; }
+.month h2 { font-size: 1.02rem; text-align: center; }
 
 h3 {
   margin: 22px 0 8px;

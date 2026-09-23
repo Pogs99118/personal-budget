@@ -1,4 +1,4 @@
-const CACHE = "budget-v5";
+const CACHE = "budget-v6";
 const FILES = ["./index.html", "./styles.css", "./logic.js", "./app.js", "./manifest.webmanifest", "./icon-180.png", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", function (event) {

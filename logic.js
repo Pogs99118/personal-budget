@@ -184,13 +184,12 @@
     return (Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)) + "%";
   }
 
-  function compareLine(current, previous, previousKey) {
+  function compareLine(current, previous, label) {
     if (previous <= 0) return "";
     const diff = roundMoney(current - previous);
-    const name = monthName(previousKey);
-    if (Math.abs(diff) < 0.01) return "Same as " + name;
-    if (diff > 0) return money(diff) + " more than " + name;
-    return money(Math.abs(diff)) + " less than " + name;
+    if (Math.abs(diff) < 0.01) return "Same as " + label;
+    if (diff > 0) return money(diff) + " more than " + label;
+    return money(Math.abs(diff)) + " less than " + label;
   }
 
   function topShopLine(items) {
@@ -276,6 +275,69 @@
     return roundMoney(monthly / weeksInMonth(key));
   }
 
+  function cleanPayDay(value) {
+    const day = Number(value);
+    if (!Number.isInteger(day) || day < 1 || day > 28) return 23;
+    return day;
+  }
+
+  function paydayOn(year, monthIndex, payDay) {
+    const last = new Date(year, monthIndex + 1, 0).getDate();
+    return ymd(new Date(year, monthIndex, Math.min(payDay, last)));
+  }
+
+  function periodStartFor(dateStr, payDay) {
+    const date = dateFromYmd(dateStr);
+    const due = Math.min(payDay, new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate());
+    if (date.getDate() >= due) return paydayOn(date.getFullYear(), date.getMonth(), payDay);
+    return paydayOn(date.getFullYear(), date.getMonth() - 1, payDay);
+  }
+
+  function periodEnd(start, payDay) {
+    const date = dateFromYmd(start);
+    return addDays(paydayOn(date.getFullYear(), date.getMonth() + 1, payDay), -1);
+  }
+
+  function shiftPeriod(start, delta, payDay) {
+    const date = dateFromYmd(start);
+    return paydayOn(date.getFullYear(), date.getMonth() + delta, payDay);
+  }
+
+  function inPeriod(date, start, end) {
+    return String(date || "") >= start && String(date || "") <= end;
+  }
+
+  function weeksInRange(start, end) {
+    const seen = new Set();
+    let cursor = start;
+    while (cursor <= end) {
+      seen.add(weekStartYmd(cursor));
+      cursor = addDays(cursor, 1);
+    }
+    return seen.size || 1;
+  }
+
+  function weeklyAllowanceForRange(monthly, start, end) {
+    return roundMoney(monthly / weeksInRange(start, end));
+  }
+
+  function shortDate(dateStr, withYear) {
+    const parts = dateStr.split("-").map(Number);
+    const options = withYear ? { day: "numeric", month: "short", year: "numeric" } : { day: "numeric", month: "short" };
+    return new Date(parts[0], parts[1] - 1, parts[2]).toLocaleDateString("en-ZA", options);
+  }
+
+  function periodRangeLabel(start, end) {
+    const withYear = start.slice(0, 4) !== end.slice(0, 4);
+    return shortDate(start, withYear) + " – " + shortDate(end, withYear);
+  }
+
+  function defaultDateForPeriod(start, end, today) {
+    if (today >= start && today <= end) return today;
+    if (end < today) return end;
+    return start;
+  }
+
   function applyData(data) {
     const categories = ensureCategories(data && data.categories);
     const ids = new Set(categories.map(function (cat) { return cat.id; }));
@@ -294,6 +356,7 @@
       groceries: groceries,
       groceryBudget: cleanBudget(data && data.groceryBudget),
       personalBudget: cleanBudget(data && data.personalBudget),
+      payDay: cleanPayDay(data && data.payDay),
       mode: data && data.mode === "groceries" ? "groceries" : "personal",
       lastCategoryId: lastCategoryId,
       lastShop: String((data && data.lastShop) || "").slice(0, 40)
@@ -338,6 +401,15 @@
     weekStartYmd: weekStartYmd,
     weeksInMonth: weeksInMonth,
     weeklyAllowance: weeklyAllowance,
+    cleanPayDay: cleanPayDay,
+    periodStartFor: periodStartFor,
+    periodEnd: periodEnd,
+    shiftPeriod: shiftPeriod,
+    inPeriod: inPeriod,
+    weeksInRange: weeksInRange,
+    weeklyAllowanceForRange: weeklyAllowanceForRange,
+    periodRangeLabel: periodRangeLabel,
+    defaultDateForPeriod: defaultDateForPeriod,
     applyData: applyData,
     emptyData: emptyData
   };

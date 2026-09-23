@@ -33,6 +33,7 @@ function snapshot() {
     groceries: state.groceries,
     groceryBudget: state.groceryBudget,
     personalBudget: state.personalBudget,
+    payDay: state.payDay,
     mode: state.mode,
     lastCategoryId: state.lastCategoryId,
     lastShop: state.lastShop
@@ -113,21 +114,31 @@ function listHtml(items, titleFn, subFn) {
   }).join("");
 }
 
+function currentPeriod() {
+  return { start: state.periodStart, end: periodEnd(state.periodStart, state.payDay) };
+}
+
+function periodItems(list) {
+  const period = currentPeriod();
+  return list.filter(function (item) { return inPeriod(item.date, period.start, period.end); }).sort(sortItems);
+}
+
 function budgetBlock(items, spent) {
   const personal = state.mode === "personal";
   const budget = personal ? state.personalBudget : state.groceryBudget;
   if (budget == null) {
-    const label = personal ? "Set a monthly personal budget" : "Set a monthly grocery budget";
+    const label = personal ? "Set a budget for this pay" : "Set a grocery budget for this pay";
     return '<button type="button" class="textlink" data-action="edit-budget">' + label + "</button>";
   }
   const left = roundMoney(budget - spent);
   const over = left < -0.001;
   const pct = Math.max(0, Math.min(100, (spent / budget) * 100));
-  const monthText = over ? money(Math.abs(left)) + " over this month" : (Math.abs(left) < 0.01 ? "Right on the monthly budget" : money(left) + " left this month");
-  const weekly = weeklyAllowance(budget, state.month);
+  const monthText = over ? money(Math.abs(left)) + " over this pay" : (Math.abs(left) < 0.01 ? "Right on this pay" : money(left) + " left this pay");
+  const period = currentPeriod();
+  const weekly = weeklyAllowanceForRange(budget, period.start, period.end);
   let weekHtml = '<p class="week-line">Weekly budget ' + esc(money(weekly)) + "</p>";
   const today = ymd(new Date());
-  if (today.slice(0, 7) === state.month) {
+  if (today >= period.start && today <= period.end) {
     const start = weekStartYmd(today);
     const end = addDays(start, 6);
     const weekSpent = sum(items.filter(function (item) {
@@ -138,18 +149,19 @@ function budgetBlock(items, spent) {
     const weekRest = weekOver ? money(Math.abs(weekLeft)) + " over" : (Math.abs(weekLeft) < 0.01 ? "on the weekly budget" : money(weekLeft) + " left");
     weekHtml += '<p class="week-line' + (weekOver ? " over" : "") + '">This week ' + esc(money(weekSpent)) + " spent · " + esc(weekRest) + "</p>";
   }
-  return '<p class="left' + (over ? " over" : "") + '">' + esc(monthText) + '</p><div class="bar' + (over ? " over" : "") + '" aria-hidden="true"><span style="width:' + pct.toFixed(2) + '%"></span></div><button type="button" class="textlink" data-action="edit-budget">Monthly budget ' + esc(money(budget)) + "</button>" + weekHtml;
+  return '<p class="left' + (over ? " over" : "") + '">' + esc(monthText) + '</p><div class="bar' + (over ? " over" : "") + '" aria-hidden="true"><span style="width:' + pct.toFixed(2) + '%"></span></div><button type="button" class="textlink" data-action="edit-budget">Budget for this pay ' + esc(money(budget)) + "</button>" + weekHtml;
 }
 
 function personalBody() {
-  const monthItems = state.personal.filter(function (item) { return inMonth(item.date, state.month); }).sort(sortItems);
+  const monthItems = periodItems(state.personal);
   const slices = slicesFrom(monthItems, state.categories);
   if (state.filterId && !slices.some(function (slice) { return slice.id === state.filterId; })) state.filterId = null;
   const total = sum(monthItems);
-  const prevKey = shiftMonth(state.month, -1);
-  const compare = compareLine(total, sum(state.personal.filter(function (item) { return inMonth(item.date, prevKey); })), prevKey);
+  const previous = shiftPeriod(state.periodStart, -1, state.payDay);
+  const previousEnd = periodEnd(previous, state.payDay);
+  const compare = compareLine(total, sum(state.personal.filter(function (item) { return inPeriod(item.date, previous, previousEnd); })), "the previous pay");
   const top = slices[0];
-  const insight = top ? esc(top.name) + " is " + esc(formatPct(top.amount, total)) + " of personal spending this month." : "";
+  const insight = top ? esc(top.name) + " is " + esc(formatPct(top.amount, total)) + " of personal spending this pay." : "";
   const shown = state.filterId ? monthItems.filter(function (item) { return item.categoryId === state.filterId; }) : monthItems;
   const filterCat = state.categories.find(function (cat) { return cat.id === state.filterId; });
   const legend = slices.map(function (slice) {
@@ -164,7 +176,7 @@ function personalBody() {
     }, function (item) { return item.note; })
     : '<p class="empty">' + (monthItems.length ? "Nothing in that category." : "Log a personal expense and the split will show here.") + "</p>";
   const count = monthItems.length === 1 ? "1 expense" : monthItems.length + " expenses";
-  return '<section class="hero"><p class="kicker">' + count + ' this month</p><p class="total">' + esc(money(total)) + "</p>" +
+  return '<section class="hero"><p class="kicker">' + count + ' this pay</p><p class="total">' + esc(money(total)) + "</p>" +
     budgetBlock(monthItems, total) +
     (compare ? '<p class="compare">' + esc(compare) + "</p>" : "") +
     (insight ? '<p class="insight">' + insight + "</p>" : "") +
@@ -181,16 +193,17 @@ function grocerySub(item) {
 }
 
 function groceryBody() {
-  const items = state.groceries.filter(function (item) { return inMonth(item.date, state.month); }).sort(sortItems);
+  const items = periodItems(state.groceries);
   const total = sum(items);
-  const prevKey = shiftMonth(state.month, -1);
-  const compare = compareLine(total, sum(state.groceries.filter(function (item) { return inMonth(item.date, prevKey); })), prevKey);
+  const previous = shiftPeriod(state.periodStart, -1, state.payDay);
+  const previousEnd = periodEnd(previous, state.payDay);
+  const compare = compareLine(total, sum(state.groceries.filter(function (item) { return inPeriod(item.date, previous, previousEnd); })), "the previous pay");
   const shop = topShopLine(items);
   const list = items.length
     ? '<h3 class="section">Logged</h3>' + listHtml(items, groceryTitle, grocerySub)
     : '<p class="empty">Log a grocery shop when you pay. This stays one list, with no category split.</p>';
   const count = items.length === 1 ? "1 purchase" : items.length + " purchases";
-  return '<section class="hero"><p class="kicker">' + count + ' this month</p><p class="total">' + esc(money(total)) + "</p>" +
+  return '<section class="hero"><p class="kicker">' + count + ' this pay</p><p class="total">' + esc(money(total)) + "</p>" +
     budgetBlock(items, total) +
     (compare ? '<p class="compare">' + esc(compare) + "</p>" : "") +
     (shop ? '<p class="insight">' + esc(shop) + "</p>" : "") +
@@ -198,13 +211,15 @@ function groceryBody() {
 }
 
 function shell(body) {
-  const atCurrent = state.month >= monthKey(new Date());
+  const today = ymd(new Date());
+  const atCurrent = state.periodStart >= periodStartFor(today, state.payDay);
+  const period = currentPeriod();
   const install = !hideInstall && !isStandalone()
     ? '<div class="install"><p>Add to home screen</p><div class="install-actions"><button type="button" data-action="how">How</button><button type="button" data-action="dismiss-install">Not now</button></div></div>'
     : "";
   const addLabel = state.mode === "groceries" ? "Add groceries" : "Add expense";
-  const tag = state.mode === "personal" ? "Monthly split by category" : "One grocery list for the month";
-  return '<header class="head"><div class="top"><h1>Budget</h1><button type="button" class="linkish" data-action="settings">More</button></div><div class="month"><button type="button" class="icon-btn" data-action="month" data-dir="-1" aria-label="Previous month">' + chevron("left") + '</button><h2>' + esc(monthLabel(state.month)) + '</h2><button type="button" class="icon-btn" data-action="month" data-dir="1" aria-label="Next month"' + (atCurrent ? " disabled" : "") + ">" + chevron("right") + '</button></div><div class="switch" role="tablist" aria-label="Budget"><button type="button" role="tab" data-action="mode" data-mode="personal" aria-selected="' + (state.mode === "personal") + '" class="' + (state.mode === "personal" ? "on" : "") + '">Personal</button><button type="button" role="tab" data-action="mode" data-mode="groceries" aria-selected="' + (state.mode === "groceries") + '" class="' + (state.mode === "groceries" ? "on" : "") + '">Groceries</button></div><p class="tag">' + tag + "</p></header>" + install + "<main>" + body + '</main><p class="fine">Saved on this phone only.</p><div class="bottom-bar"><button type="button" id="addBtn" data-action="add">' + addLabel + "</button></div>";
+  const tag = state.mode === "personal" ? "This pay, split by category" : "This pay, groceries only";
+  return '<header class="head"><div class="top"><h1>Budget</h1><button type="button" class="linkish" data-action="settings">More</button></div><div class="month"><button type="button" class="icon-btn" data-action="month" data-dir="-1" aria-label="Previous pay">' + chevron("left") + '</button><h2>' + esc(periodRangeLabel(period.start, period.end)) + '</h2><button type="button" class="icon-btn" data-action="month" data-dir="1" aria-label="Next pay"' + (atCurrent ? " disabled" : "") + ">" + chevron("right") + '</button></div><div class="switch" role="tablist" aria-label="Budget"><button type="button" role="tab" data-action="mode" data-mode="personal" aria-selected="' + (state.mode === "personal") + '" class="' + (state.mode === "personal" ? "on" : "") + '">Personal</button><button type="button" role="tab" data-action="mode" data-mode="groceries" aria-selected="' + (state.mode === "groceries") + '" class="' + (state.mode === "groceries" ? "on" : "") + '">Groceries</button></div><p class="tag">' + tag + "</p></header>" + install + "<main>" + body + '</main><p class="fine">Saved on this phone only.</p><div class="bottom-bar"><button type="button" id="addBtn" data-action="add">' + addLabel + "</button></div>";
 }
 
 function render() {
@@ -217,7 +232,7 @@ function render() {
 function drawChart() {
   const canvas = document.getElementById("chart");
   if (!canvas) return;
-  const monthItems = state.personal.filter(function (item) { return inMonth(item.date, state.month); });
+  const monthItems = periodItems(state.personal);
   const slices = slicesFrom(monthItems, state.categories);
   const dpr = Math.min(window.devicePixelRatio || 1, 3);
   const size = 180;
@@ -322,7 +337,7 @@ function openEntry(id) {
   }
   const del = existing ? '<button type="button" class="delete" id="deleteBtn" data-action="delete-entry">Delete</button>' : "";
   openSheet(
-    '<div class="handle"></div><div class="sheet-head"><h2>' + title + '</h2><button type="button" class="linkish" data-action="close">Close</button></div><form id="entryForm" autocomplete="off"><label class="field" for="amount">Amount</label><input id="amount" class="amount" name="amount" inputmode="decimal" placeholder="0,00" value="' + esc(existing ? amountField(existing.amount) : "") + '" autocomplete="off" />' + extra + '<label class="field" for="note">Note</label><input id="note" class="text" name="note" maxlength="80" placeholder="Optional" value="' + esc(existing ? existing.note : "") + '" /><label class="field" for="spentOn">Date</label><div class="chips"><button type="button" class="chip" data-action="date-today">Today</button><button type="button" class="chip" data-action="date-yesterday">Yesterday</button></div><input id="spentOn" class="text" type="date" name="date" required max="' + ymd(new Date()) + '" value="' + esc(existing ? existing.date : defaultDateForMonth(state.month, ymd(new Date()))) + '" /><p class="error" role="alert"></p><button class="save" type="submit">' + (existing ? "Save changes" : "Save") + "</button>" + del + "</form>"
+    '<div class="handle"></div><div class="sheet-head"><h2>' + title + '</h2><button type="button" class="linkish" data-action="close">Close</button></div><form id="entryForm" autocomplete="off"><label class="field" for="amount">Amount</label><input id="amount" class="amount" name="amount" inputmode="decimal" placeholder="0,00" value="' + esc(existing ? amountField(existing.amount) : "") + '" autocomplete="off" />' + extra + '<label class="field" for="note">Note</label><input id="note" class="text" name="note" maxlength="80" placeholder="Optional" value="' + esc(existing ? existing.note : "") + '" /><label class="field" for="spentOn">Date</label><div class="chips"><button type="button" class="chip" data-action="date-today">Today</button><button type="button" class="chip" data-action="date-yesterday">Yesterday</button></div><input id="spentOn" class="text" type="date" name="date" required max="' + ymd(new Date()) + '" value="' + esc(existing ? existing.date : defaultDateForPeriod(currentPeriod().start, currentPeriod().end, ymd(new Date()))) + '" /><p class="error" role="alert"></p><button class="save" type="submit">' + (existing ? "Save changes" : "Save") + "</button>" + del + "</form>"
   );
   const amount = document.getElementById("amount");
   if (amount) {
@@ -354,7 +369,7 @@ function openSettings(scrollInstall) {
   const personalValue = state.personalBudget == null ? "" : amountField(state.personalBudget);
   const groceryValue = state.groceryBudget == null ? "" : amountField(state.groceryBudget);
   openSheet(
-    '<div class="handle"></div><div class="sheet-head"><h2>More</h2><button type="button" class="linkish" data-action="close">Close</button></div><p class="fine">Your amounts stay on this phone. Nothing is uploaded.</p><h3>Monthly budgets</h3><p class="fine">Each weekly budget is that month’s amount split across the weeks in the month.</p><form id="settingsPersonalBudget" autocomplete="off"><label class="field" for="personalBudgetInput">Personal</label><input id="personalBudgetInput" class="text" name="budget" inputmode="decimal" placeholder="Monthly amount" value="' + esc(personalValue) + '" /><button class="save" type="submit">Save personal budget</button><p class="error" role="alert"></p></form><form id="settingsBudget" autocomplete="off"><label class="field" for="groceryBudgetInput">Groceries</label><input id="groceryBudgetInput" class="text" name="budget" inputmode="decimal" placeholder="Monthly amount" value="' + esc(groceryValue) + '" /><button class="save" type="submit">Save grocery budget</button><p class="error" role="alert"></p></form><h3>Personal categories</h3><div id="catList">' + state.categories.map(categoryRow).join("") + '</div><form id="addCatForm" class="inline-form" autocomplete="off"><input class="text" name="name" maxlength="24" placeholder="New category" /><button type="submit">Add</button></form><h3>Backup</h3><button type="button" class="secondary" data-action="export">Download backup</button><label class="secondary file">Restore a backup<input id="importFile" type="file" accept="application/json,.json" hidden /></label><div id="importConfirm" hidden></div>' + installHelpHtml() + '<h3>Erase</h3><button type="button" class="delete" id="eraseBtn" data-action="erase">Erase everything on this phone</button>'
+    '<div class="handle"></div><div class="sheet-head"><h2>More</h2><button type="button" class="linkish" data-action="close">Close</button></div><p class="fine">Your amounts stay on this phone. Nothing is uploaded.</p><h3>Monthly budgets</h3><p class="fine">The weekly budget is that amount split across the weeks until the next payday.</p><form id="settingsPayDay" autocomplete="off"><label class="field" for="payDayInput">Payday</label><input id="payDayInput" class="text" name="payDay" inputmode="numeric" min="1" max="28" value="' + esc(String(state.payDay)) + '" /><p class="fine">This pay runs from that day until the day before the next one.</p><button class="save" type="submit">Save payday</button><p class="error" role="alert"></p></form><form id="settingsPersonalBudget" autocomplete="off"><label class="field" for="personalBudgetInput">Personal</label><input id="personalBudgetInput" class="text" name="budget" inputmode="decimal" placeholder="Monthly amount" value="' + esc(personalValue) + '" /><button class="save" type="submit">Save personal budget</button><p class="error" role="alert"></p></form><form id="settingsBudget" autocomplete="off"><label class="field" for="groceryBudgetInput">Groceries</label><input id="groceryBudgetInput" class="text" name="budget" inputmode="decimal" placeholder="Monthly amount" value="' + esc(groceryValue) + '" /><button class="save" type="submit">Save grocery budget</button><p class="error" role="alert"></p></form><h3>Personal categories</h3><div id="catList">' + state.categories.map(categoryRow).join("") + '</div><form id="addCatForm" class="inline-form" autocomplete="off"><input class="text" name="name" maxlength="24" placeholder="New category" /><button type="submit">Add</button></form><h3>Backup</h3><button type="button" class="secondary" data-action="export">Download backup</button><label class="secondary file">Restore a backup<input id="importFile" type="file" accept="application/json,.json" hidden /></label><div id="importConfirm" hidden></div>' + installHelpHtml() + '<h3>Erase</h3><button type="button" class="delete" id="eraseBtn" data-action="erase">Erase everything on this phone</button>'
   );
   if (scrollInstall) {
     const help = document.getElementById("installHelp");
@@ -383,11 +398,12 @@ function updateWeeklyPreview(raw) {
   if (!el) return;
   const amount = parseMoney(raw);
   if (amount == null) {
-    el.textContent = "The weekly budget is this amount split across the weeks in the month.";
+    el.textContent = "The weekly budget is this amount split across the weeks until the next payday.";
     return;
   }
-  const weeks = weeksInMonth(state.month);
-  el.textContent = monthLabel(state.month) + " has " + weeks + (weeks === 1 ? " week" : " weeks") + ", so the weekly budget is " + money(weeklyAllowance(amount, state.month)) + ".";
+  const period = currentPeriod();
+  const weeks = weeksInRange(period.start, period.end);
+  el.textContent = periodRangeLabel(period.start, period.end) + " has " + weeks + (weeks === 1 ? " week" : " weeks") + ", so the weekly budget is " + money(weeklyAllowanceForRange(amount, period.start, period.end)) + ".";
 }
 
 function setDate(value) {
@@ -487,7 +503,7 @@ function saveEntry() {
     });
     if (place) state.lastShop = place;
   }
-  state.month = date.slice(0, 7);
+  state.periodStart = periodStartFor(date, state.payDay);
   state.filterId = null;
   persist();
   closeSheet();
@@ -555,10 +571,11 @@ function eraseAll() {
   state.groceries = [];
   state.groceryBudget = null;
   state.personalBudget = null;
+  state.payDay = 23;
   state.mode = "personal";
   state.lastCategoryId = fresh.lastCategoryId;
   state.lastShop = "";
-  state.month = monthKey(new Date());
+  state.periodStart = periodStartFor(ymd(new Date()), state.payDay);
   state.filterId = null;
   closeSheet();
   render();
@@ -600,6 +617,8 @@ function confirmImport() {
   state.groceries = next.groceries;
   state.groceryBudget = next.groceryBudget;
   state.personalBudget = next.personalBudget;
+  state.payDay = next.payDay;
+  state.periodStart = periodStartFor(ymd(new Date()), state.payDay);
   state.mode = next.mode;
   state.lastCategoryId = next.lastCategoryId;
   state.lastShop = next.lastShop;
@@ -651,9 +670,9 @@ function onClick(event) {
   }
   if (action === "month") {
     const dir = Number(btn.dataset.dir);
-    const next = shiftMonth(state.month, dir);
-    if (dir > 0 && next > monthKey(new Date())) return;
-    state.month = next;
+    const next = shiftPeriod(state.periodStart, dir, state.payDay);
+    if (dir > 0 && next > periodStartFor(ymd(new Date()), state.payDay)) return;
+    state.periodStart = next;
     state.filterId = null;
     render();
     return;
@@ -780,6 +799,20 @@ function onSubmit(event) {
     saveBudget(event.target, mode);
     return;
   }
+  if (event.target.id === "settingsPayDay") {
+    event.preventDefault();
+    const day = Number(new FormData(event.target).get("payDay"));
+    if (!Number.isInteger(day) || day < 1 || day > 28) {
+      showError(event.target, "Choose a day from 1 to 28");
+      return;
+    }
+    state.payDay = day;
+    state.periodStart = periodStartFor(ymd(new Date()), state.payDay);
+    persist();
+    render();
+    toast("Payday saved");
+    return;
+  }
   if (event.target.id === "addCatForm") {
     event.preventDefault();
     const cat = addCategory(new FormData(event.target).get("name"));
@@ -818,7 +851,7 @@ function onInput(event) {
 }
 
 state = load();
-state.month = monthKey(new Date());
+state.periodStart = periodStartFor(ymd(new Date()), state.payDay);
 state.filterId = null;
 try { hideInstall = localStorage.getItem("budget-hide-install") === "1"; } catch (err) {}
 
